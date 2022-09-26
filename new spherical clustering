@@ -1,0 +1,2080 @@
+library(LaplacesDemon)
+library(mvtnorm)
+library('rotasym')
+
+library(plotly)
+library(plot3D)
+
+set.seed(1942)
+n <- 700
+K <- 4
+## 需要用bernoulli来生成
+
+## 生成cluster prob
+## pi need be be constructed as SB prob
+
+vvector <- function(H,parameter=matrix(rep(c(1,2), K),ncol=2,byrow = T)){
+  # parameter 是 H x 2的矩阵
+  # 包含了各个h 下的 a,b 参数for beta
+  
+  v <- c()
+  j = 1
+  while(j <= H-1){
+    v[j] <- rbeta(1,parameter[j,][1],parameter[j,][2])
+    j = j+1
+  }
+  v[H] <- 1
+  return(v)
+}
+sbweight <- function(H,v){
+  
+  sbconstruction <- function(h,v){
+    w <- 1
+    t <- 1
+    while(t <= h){
+      if(t < h){
+        w <- w * (1-v[t])
+      }else{
+        w <- w * v[t]
+      }
+      t <- t+1
+    }
+    return(w)
+  }
+  
+  wvector <- c()
+  jj <- 1
+  while(jj <= H){
+    wvector[jj] <- sbconstruction(jj,v)
+    jj <- jj+1
+  }
+  return(wvector)
+}
+
+
+pii <- matrix(ncol = K,nrow = n)
+
+for(i in 1:n){
+  pii[i,] <- sbweight(K,vvector(K))
+}
+
+## 基于cluster prob来simulate data 
+initial_cluster<-rcat(n,pii)
+#initial_cluster = sample(x=K, size=n, replace=TRUE)
+### building the B: K x K
+
+##########
+
+##########
+
+###K <- 3
+## 用文章中的B 试试看
+B <- matrix(c(0.66,0.16,0.20,0.33,
+              0.16,0.77,0.17,0.07,
+              0.20,0.17,0.81,0.19,
+              0.33,0.07,0.19,0.68),ncol = K)
+
+B
+
+## degree correction
+## 表现出来的是类似ray的长短
+
+rho <- rbeta(n,2,1)
+
+
+mat <- matrix(0,ncol = n,nrow = n)
+
+set.seed(1341)
+for(i in 1:(nrow(mat)-1)){
+  for(j in (i+1):ncol(mat)){
+    mat[i,j] <- rbern(n=1,p=rho[i] * rho[j] * B[initial_cluster[i],
+                                                initial_cluster[j]])
+    mat[j,i] <- mat[i,j]
+  }
+}
+# 还需要给diag赋值1
+##diag(mat) == 0
+sum(mat != t(mat))
+## need to be symmetric
+
+P = eigen(mat)$vectors
+## eigen value有负的
+## 负的应该也可以 毕竟 X = U|S|^{1/2} 
+## 可是如果加了abs() 那还叫什么还原呢
+# eigenvalue矩阵是 |S|^{1/2}
+eigenvalue <- eigen(mat)$values
+## 但这样的话 前50个eigen 也只能解释0.6
+## 会不会太少了
+
+## 
+plot(eigenvalue)
+k = 6
+X <- P[,1:k] %*% diag(sqrt(eigenvalue[1:k]))
+
+#X
+#X是 100 x k矩阵
+# 可以看到 是有重叠的
+
+
+anglematrix <- function(x){
+  ## 用文章里面的transformation
+  anglemapping <- function(x){
+    theta <- rep(0,length(x)-1)
+    
+    if(x[1]<0){
+      theta[1] <- 2*pi - acos(x[2]/sqrt(x[1]^2+x[2]^2))
+    }else { 
+      theta[1] <- acos(x[2]/(sqrt(x[1]^2+x[2]^2)))
+    }
+    
+    for(i in 2:(length(x)-1)){
+      theta[i] <- 2*acos(x[i+1]/sqrt(sum(x[1:i+1]^2)))
+    }
+    
+    return(theta)
+    
+  }
+  
+  Theta <- matrix(nrow = nrow(x),ncol = ncol(x)-1)
+  for (i in 1:nrow(x)){
+    Theta[i,] <- anglemapping(x[i,])
+  }
+  return(Theta)
+}
+Theta <- anglematrix(X)
+
+par(mfrow = c(2,2))
+plot(X[,1],X[,2],col = initial_cluster)
+plot(X[,2],X[,3],col = initial_cluster)
+plot(X[,3],X[,4],col = initial_cluster)
+plot(X[,4],X[,5],col = initial_cluster)
+
+par(mfrow = c(1,2))
+plot(Theta[,1],Theta[,2],col = initial_cluster)
+plot(Theta[,2],Theta[,3],col = initial_cluster)
+
+
+#runif(n=n)
+
+
+## Prior
+# for convariance matrix, \Sigma*, \gamma
+## 为了后面的poseterior初步过程的顺利
+## 需要正确的初始化
+
+# 如何拼接Sigma
+covariance <- function(Sigmastar,gamma){
+  
+  ## 一定要看清楚cov的定义！！！
+  ## 这样才能构造出 正定的cov
+  Sigmastar_new <- Sigmastar + t(gamma) %*% gamma
+  covleft <- rbind(Sigmastar_new,gamma)
+  covright <- c(gamma,1)
+  cov <- cbind(covleft,(covright))
+  return(cov)
+}
+
+
+# r_i 
+
+# r 怎么initialize
+## r的范围不要太大 以免之后不收敛
+rinitialize <- function(Theta){
+  r <- c()
+  t <- 1
+  set.seed(32342)
+  while(t <= nrow(Theta)){
+    r[t] <- runif(1,0.5,1.5)
+    t = t+1
+  }
+  return(r)
+}
+## r : norm of x 
+
+uvector <- function(theta){
+  uvecelement <- function(angle){
+    ## 拿来生成sin()...sin()cos()的
+    ui <- 1
+    j = 1
+    while(j <= length(angle)){
+      if(j == length(angle)){
+        ui <- ui * cos(angle[j])
+      }else{
+        ui <- ui*sin(angle[j])}
+      j <- j+1
+    }
+    return(ui)
+  }
+  
+  u <- c()
+  t = 1
+  while(t <= length(theta)){
+    if(t == 1){
+      u[t] <- cos(theta[t])}else{
+        u[t] <- uvecelement(theta[1:t])
+      }
+    t = t+1
+  }
+  
+  ulast <- 1
+  tt = 1
+  while(tt <= length(theta)){
+    ulast <- ulast * sin(theta[tt])
+    tt <- tt+1
+  }
+  
+  u[length(theta)+1] <- ulast
+  return(u)
+}
+
+umatrix <- function(Theta){
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  umatrix <- matrix(0,nrow=nrow(Theta),ncol = ncol(Theta)+1)
+  
+  for(i in 1:nrow(Theta)){
+    umatrix[i,] <- uvector(Theta[i,])
+  }
+  
+  return(umatrix)
+}
+
+#############
+
+### 或者可用M-H sampling
+### 如果slice sampling不robust的话
+## 那可以用MH
+## 理论上来说 如果mu, Sigma都正常 那么r不可能不正常
+## 因为理论上的分布就是PN分布
+
+## slice sampling会放大r的deviation
+## 所以需要有M-H中的proposal 分布来限制r游走的scale
+## misallocation也会导致deviation 但不是主要原因
+## 因为即使是在S-Bprior算法中预设cluster为 K 
+## 也会出现deviation的情况
+rposterior <- function(r,Theta,mu,Sigmastar,gamma){
+  
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  u <- umatrix(Theta)
+  Cov <- covariance(Sigmastar,gamma)
+  for(i in 1:nrow(Theta)){
+    A = t(u[i,]) %*% solve(Cov) %*% (u[i,])   ## ? u_i到底是什么
+    ## !! u是指的(sin\theta,cos\theta)类型的向量
+    B = t(u[i,]) %*% solve(Cov) %*% t(mu)
+    v <- runif(1,min=0,max = exp(-(A*(r[i] - B/A)^2)/2))
+    uu <- runif(1,0,1)
+    
+    ## 若出现了 A过大的问题（Cov的随机性 导致了A过大的情况也是随机的）
+    ## 这里不能这么替换
+    ## 因为一旦出现 r < (B/A)
+    ## 则有 rho_1 = r_i, rho_2 = 2B/A - r_i 
+    ## 所以会越来越偏离
+    ## 所以当出现了v=0
+    ## 不如直接 r[i] = r[i] 
+    ## 跳过这 A>10的循环
+    if(v == 0){
+      r[i] <- r[i]
+    }else{
+      rho1 <- B/A+max(-B/A,-sqrt(-2*log(v)/A))
+      rho2 <- B/A + sqrt(-2*log(v)/A)
+      r[i] <- ((rho2^k - rho1^k)*uu + rho1^k)^(1/k)
+    }
+  }
+  
+  return(r)
+}
+
+
+
+r_posterior_mh <- function(r,Theta,mu,Sigmastar,gamma){
+  
+  ind_mh_r <- function(r,mu,A,B,iter=1200){
+    finalr <- 0
+    k <- length(mu)
+    for(j in 1:iter){
+      newr <- rgamma(1,norm(mu,'2'),1)
+      posterior_ratio <- ((newr**(k-1))*exp(-(A*(newr-B/A)**2)/2))/
+        ((r**(k-1))*exp(-(A*(r-B/A)**2)/2))
+      uni <- runif(1,0,1)
+      if(uni <= posterior_ratio){
+        finalr <- newr
+        break
+      }else{
+        finalr <- r
+      }
+    }
+    return(finalr)
+  }
+  
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  u <- umatrix(Theta)
+  Cov <- covariance(Sigmastar,gamma)
+  for(i in 1:nrow(Theta)){
+    A = t(u[i,]) %*% solve(Cov) %*% (u[i,])   ## ? u_i到底是什么
+    ## !! u是指的(sin\theta,cos\theta)类型的向量
+    B = t(u[i,]) %*% solve(Cov) %*% t(mu)
+    r[i] <- ind_mh_r(r[i],mu,A,B)
+  }
+  
+  return(r)
+}
+
+#sqrt(sum(X[53,]^2))
+#rupdate <- rposterior(r,Theta,mu,Sigmastar,gamma)
+
+# gamma
+priorSigma_gamma <- diag(rep(0.75,k-1))
+
+gammaposetrior <- function(r,Theta,mu,Sigmastar){
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  u <- umatrix(Theta)
+  ru <- matrix(nrow=nrow(u),ncol = ncol(u))
+  j <- 1
+  while(j <= nrow(Theta)){
+    ru[j,] <- r[j] * u[j,] 
+    j=j+1
+  }
+  V <- solve(solve(Sigmastar)*sum((ru[,k] - mu[k])^2)+solve(priorSigma_gamma))
+  xx <- ru[,-k]-matrix(rep(mu[-k],nrow(ru)),nrow = nrow(ru),byrow = T)
+  xxx <- matrix(nrow = nrow(xx),ncol= ncol(xx))
+  for(i in 1:nrow(ru)){
+    xxx[i,] <- xx[i,]* (ru[,k]-mu[k])[i]
+  }
+  xvector <- apply(xxx,2,FUN =sum)
+  
+  mugamma <- V%*%(solve(Sigmastar) %*% xvector)
+  gammaposterior <- rmvnorm(1,mugamma,V,method='svd')
+  return(gammaposterior)
+}
+#gammaupdate<-gammaposetrior(r,Theta,mu,Sigmastar)
+
+# Sigmastar
+## 当组别中的成分很少时 则会出现Sigma update后得到的
+## 值过大 且会同时发生对应r生成有误 : NaN Inf
+
+
+priorSigma_Sigmastar <- diag(rep(0.75,each = k-1))
+
+Sigmastarposterior <- function(r,Theta,mu,gamma){
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  
+  u <- umatrix(Theta)
+  ru <- matrix(nrow=nrow(u),ncol = ncol(u))
+  j <- 1
+  while(j <= nrow(Theta)){
+    ru[j,] <- r[j] * u[j,] 
+    j=j+1
+  }
+  t <- 1
+  S <- 0
+  while(t <= nrow(ru)){
+    SS = ru[t,-k] - (mu[-k] + (gamma)*(ru[t,k]-mu[k]))
+    S <- S + SS
+    t = t+1
+  }
+  SSS <- t(S) %*% S 
+  Sigmastar_posterior <- rinvwishart(k+nrow(ru),SSS+priorSigma_Sigmastar)
+  return(Sigmastar_posterior)
+}
+
+#Sigmastarupdate<-Sigmastarposterior(r,Theta,mu,gamma)
+
+# mu
+priorSigma_mu <- diag(rep(1,k))
+## 因为和r有关的 update变量是 u_i , \Sigma, \mu
+## 由于之前 没有包含进original observations时 r会不收敛
+## 且由于r的update实际上是基于 u_i^\top \Sigma^{-1} u_i * r_i
+## 与 u_i^\top \Sigma^{-1} \mu, 所有需要\mu的update 有真值参与
+muposterior <- function(r,Theta,Sigmastar,gamma){
+  if(is.vector(Theta)){
+    Theta <- t(matrix(Theta))
+  }
+  
+  u <- umatrix(Theta)
+  ru <- matrix(nrow=nrow(u),ncol = ncol(u))
+  j <- 1
+  while(j <= nrow(Theta)){
+    ru[j,] <- r[j] * u[j,] 
+    j=j+1
+  }
+  Cov <- covariance(Sigmastar,gamma)
+  V <- solve(solve(priorSigma_mu) + nrow(Theta)*solve(Cov))
+  # X[ind,]
+  rusum <- apply(ru,2,sum)
+  mumu <- V %*% (solve(Cov) %*% rusum)
+  # method: svd prevend the nonpositive definite case
+  mupost <- rmvnorm(1,mean = mumu,V,method = 'svd')
+  return(mupost)
+}
+
+#muupdate<-muposterior(r,Theta,Sigmastar,gamma)
+
+############### Stick breaking construction and clustering process
+## 现在需要根据Likelihood 进行cluster allocation
+## 以及针对cluster的个数 对v w进行update
+## update只需要改变a,b参数即可
+
+
+ini_Sigmastar <- function(H){
+  S <- list()
+  j <- 1
+  while(j <= H){
+    ## 注意initialization 
+    ## 不然后面在计算r update的时候
+    ## 就会出现 A = u^T solve(Sigma) u过大的问题
+    ## 于是 需要初始化较大的Sigma
+    ## 这样才能有solve(Sigma)不过大
+    S[[j]] <- rinvwishart(k,priorSigma_Sigmastar)
+    j <- j+1
+  }
+  return(S)
+}
+
+
+ini_gamma <- function(H){
+  gamma <- list()
+  j <- 1
+  while(j <= H){
+    gamma[[j]] <- rmvnorm(1,mean = rep(0,k-1),priorSigma_gamma)
+    j <- j+1
+  }
+  return(gamma)
+}
+
+
+ini_mu <- function(H){
+  mu <- list()
+  j <- 1
+  while(j <= H){
+    mu[[j]] <- rmvnorm(1,mean = rep(0,k),priorSigma_mu)
+    j <- j+1
+  }
+  return(mu)
+}
+
+ini_mu_len <- function(H){
+  mu_len <- c()
+  for(i in 1:H){
+    set.seed(i)
+    mu_len[i] <- runif(1,0.5,1.5)
+  }
+  return(mu_len)
+}
+
+## 构造stick breaking weights
+
+vseq <- function(H,parameter=matrix(rep(c(1,M), H),ncol=2,byrow = T)){
+  # parameter 是 H x 2的矩阵
+  # 包含了各个h 下的 a,b 参数for beta
+  set.seed(1341)
+  v <- c()
+  j = 1
+  while(j <= H-1){
+    v[j] <- rbeta(1,parameter[j,][1],parameter[j,][2])
+    j = j+1
+  }
+  v[H] <- 1
+  return(v)
+}
+
+
+sbweight <- function(H,v){
+  sbconstruction <- function(h,v){
+    w <- 1
+    t <- 1
+    while(t <= h){
+      if(t < h){
+        w <- w * (1-v[t])
+      }else{
+        w <- w * v[t]
+      }
+      t <- t+1
+    }
+    return(w)
+  }
+  
+  wvector <- c()
+  jj <- 1
+  while(jj <= H){
+    wvector[jj] <- sbconstruction(jj,v)
+    jj <- jj+1
+  }
+  return(wvector)
+}
+
+## 注意 Beta(A_h + 1 , B_h + M )
+## 中的h = 1~H-1
+## 但其实在vseq函数中 已经select v_1~v_H-1了
+betaparameterupdate <- function(H,newindex){
+  bmatrix <- matrix(rep(0,2*H),ncol = 2)
+  for(h in 1:H){
+    bmatrix[h,] <- c(1+sum(newindex==h),
+                     M+sum(newindex>h))
+  }
+  return(bmatrix)
+}
+
+
+###
+
+indexupdate <- function(clusterweight,H,r,Theta,
+                        mulist,Sigmastarlist,gammalist){
+  
+  clusterposterior <- function(clusterweight,H,ri,xi,
+                               mulist,Sigmastarlist,gammalist){
+    # 输出的是某个xi的index
+    # 这里的x为 r_i u_i
+    
+    jointdensity <- function(r,x,mu,Sigmastar,gamma){
+      #x指的就是r_i * u_i
+      
+      den1<- dmvn(c(x[-k]),c(mu[-k]+(gamma)*(x[k]-mu[k])),Sigmastar)
+      
+      den2 <- dnorm(x[k], mu[k], 1)
+      jodensity <- r^k * den1 * den2
+      return(jodensity)
+    }
+    
+    posterior <- c()
+    
+    for(h in 1:H){
+      posterior[h] <- clusterweight[h] * jointdensity(ri,xi,
+                                                      mulist[[h]],Sigmastarlist[[h]],gammalist[[h]])
+    }
+    return(which.max(posterior))
+  }
+  
+  
+  u <- umatrix(Theta)
+  index <- c()
+  for(i in 1:nrow(Theta)){
+    index[i] <- clusterposterior(clusterweight,H,r[i],
+                                 r[i]*u[i,],mulist,Sigmastarlist,gammalist)
+  }
+  return(as.numeric(as.factor(index)))
+}
+
+## clusterweight的update 过程
+
+## 根据cluster对参数进行升级
+## MCMC过程
+
+########################
+MCMCr <- function(newindex,r,Theta,mulist,Sigmastarlist,gammalist){
+  rupdate <- r
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    rupdate[ind] <- rposterior(r=r[ind],Theta=Theta[ind,],
+                               mulist[[cluster]],
+                               Sigmastarlist[[cluster]],gammalist[[cluster]])
+  }
+  
+  return(rupdate)
+}
+
+MCMCr_mh <- function(newindex,r,Theta,mulist,Sigmastarlist,gammalist){
+  rupdate <- r
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    rupdate[ind] <- r_posterior_mh(r=r[ind],Theta=Theta[ind,],
+                               mulist[[cluster]],
+                               Sigmastarlist[[cluster]],gammalist[[cluster]])
+  }
+  
+  return(rupdate)
+}
+
+MCMCSigmastar <- function(newindex,Sigmastarlist,r,Theta,mulist,gammalist){
+  Slist <- Sigmastarlist
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    Slist[[cluster]] <- Sigmastarposterior(r=r[ind],Theta=Theta[ind,],
+                                           mulist[[cluster]],
+                                           gammalist[[cluster]])
+  }
+  
+  return(Slist)
+}
+
+
+MCMCgamma <- function(newindex,r,Theta,gammalist,mulist,Sigmastarlist){
+  glist <- gammalist
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    glist[[cluster]] <- gammaposetrior(r=r[ind],Theta=Theta[ind,],
+                                       mulist[[cluster]],
+                                       Sigmastarlist[[cluster]])
+  }
+  
+  return(glist)
+}
+
+MCMCmu <- function(newindex,mulist,r,Theta,Sigmastarlist,gammalist){
+  mlist <- mulist
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    mlist[[cluster]] <- muposterior(r=r[ind],Theta=Theta[ind,],
+                                    Sigmastarlist[[cluster]],
+                                    gammalist[[cluster]])
+  }
+  
+  return(mlist) 
+}
+
+# truncated stick breaking construction
+## M 在后面的no gap算法中
+## 涉及到 new cluster出现的权重
+## M越大 则越鼓励new cluster的出现
+
+## 而此处则是为了SB constructed的权重
+## 更加均衡
+M <- 2# total mass
+## 如果是随机的假设 看看会不会收敛
+H <- 4# cluster number
+
+
+
+## initialization
+mulistnew  <- ini_mu(H)
+Sigmastarlistnew <- ini_Sigmastar(H)
+gammalistnew <- ini_gamma(H)
+rnew <- rinitialize(Theta)
+## 如果使用truncated SB construction
+## 当H很小时 则会出现不合理的Initialization
+## 比如w_H会特别大
+## 不过若是M很小的话 则可以修正这样的偏差
+## 例如 如果假设M = 2 那么weight就较平衡
+
+clusterweight <- sbweight(H,vseq(H))
+# 这里的newindex是 在所有参数都初始化之后
+# 有基于 w_h * f_h的cluster allocation
+newindex <- indexupdate(clusterweight,H,rnew,Theta,
+                        mulistnew,Sigmastarlistnew,gammalistnew)
+## MCMC update
+
+
+rnew_mcmc <- list()
+Sigmastarlistnew_mcmc <- list()
+newindex_mcmc <- list()
+gammalistnew_mcmc <- list()
+mulistnew_mcmc <- list()
+clusterweight_mcmc <- list()
+
+rnew_mcmc[[1]] <- rnew
+Sigmastarlistnew_mcmc[[1]] <- Sigmastarlistnew
+newindex_mcmc[[1]] <- newindex
+gammalistnew_mcmc[[1]] <- gammalistnew
+mulistnew_mcmc[[1]] <- mulistnew
+clusterweight_mcmc[[1]] <- clusterweight
+
+## 如何对SB weight的cluster进行cancel
+## 是否可以用distance specified
+
+
+iterations <- 600
+for(itr in 2:iterations){
+  
+  rnew<-MCMCr_mh(newindex,r=rnew,Theta = Theta,mulist = mulistnew,
+              Sigmastarlist = Sigmastarlistnew,gammalist = gammalistnew)
+  
+  rnew_mcmc[[itr]] <- rnew
+  
+  Sigmastarlistnew<-MCMCSigmastar(newindex,Sigmastarlist = Sigmastarlistnew,r=rnew,Theta=Theta,
+                                  mu=mulistnew,gamma=gammalistnew)
+  
+  Sigmastarlistnew_mcmc[[itr]] <- Sigmastarlistnew
+  
+  gammalistnew<-MCMCgamma(newindex,r=rnew,Theta=Theta,
+                          gammalist=gammalistnew,mulist=mulistnew,
+                          Sigmastarlist=Sigmastarlistnew)
+  
+  gammalistnew_mcmc[[itr]] <- gammalistnew
+  
+  mulistnew<-MCMCmu(newindex,mulistnew,X,Theta,Sigmastarlistnew,gammalistnew)
+  
+  mulistnew_mcmc[[itr]] <- mulistnew
+  
+  newindex<-indexupdate(clusterweight,H,rnew,Theta,
+                        mulistnew,Sigmastarlistnew,gammalistnew)
+  
+  newindex_mcmc[[itr]] <- newindex
+  
+  
+  clusterweight<- sbweight(H,
+                           vseq(H,betaparameterupdate(H,newindex)))
+  
+  clusterweight_mcmc[[itr]] <- clusterweight
+  
+}
+## 或许可以通过cluster weight的大小 来
+## 但是cluster weight小的 不代表他cluster的容量小
+## 也许需要看具体的weight构造
+
+## 可以看到 此处rnew的混乱也是随机的
+clusterweight_mcmc[[1]]
+clusterweight_mcmc[[iterations]]
+
+newindex_mcmc[[1]]
+newindex_mcmc[[iterations]]
+
+## 
+rnew_mcmc[[1]]
+
+##
+rnew_mcmc[[iterations]] 
+## 即便用orginal observation X 来update \mu 
+## 还是有奇怪的偏离值
+newindex_mcmc[[iterations]][which(rnew_mcmc[[iterations]] >5)]## 偏离 与cluster无关
+
+
+par(mfrow = c(1,2))
+
+barplot(table(initial_cluster),main = 'initial',ylim = c(0,300))
+barplot(table(newindex_mcmc[[iterations]]),
+        main = paste('S-B results',', iter = ',as.character(iterations)),ylim = c(0,300))
+?barplot
+
+
+par(mfrow = c(2,2))
+plot(X[,1],X[,2],col = newindex_mcmc[[iterations]],main = paste('S-B results',', iter = ',as.character(iterations)))
+plot(X[,2],X[,3],col = newindex_mcmc[[iterations]],main = paste('S-B results',', iter = ',as.character(iterations)))
+plot(X[,3],X[,4],col = newindex_mcmc[[iterations]])
+plot(X[,4],X[,5],col = newindex_mcmc[[iterations]])
+
+par(mfrow = c(1,2))
+plot(Theta[,1],Theta[,2],col = newindex_mcmc[[iterations]],main = paste('S-B results',', iter = ',as.character(iterations)))
+plot(Theta[,2],Theta[,3],col = newindex_mcmc[[iterations]],main = paste('S-B results',', iter = ',as.character(iterations)))
+
+#plot(Theta[,2],Theta[,3],col = newindex_mcmc[[iterations]])
+#plot(Theta[,3],Theta[,4],col = newindex_mcmc[[iterations]])
+
+
+
+save(rnew_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\rnew_mcmc_itr1500.Rdata')
+save(newindex_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\newindex_mcmc_itr1500.Rdata')
+save(Sigmastarlistnew_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\Sigmastarlistnew_mcmc_itr1500.Rdata')
+save(gammalistnew_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\gammalistnew_mcmc_itr1500.Rdata')
+save(mulistnew_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\mulistnew_mcmc_itr1500.Rdata')
+save(clusterweight_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\clusterweight_mcmc_itr1500.Rdata')
+
+
+library(xtable)
+library(coda)
+#traceplot(as.mcmc(clusterweight_mcmc))
+
+#######################
+# 改动
+## 尝试用K means来做cluster initialization
+## 且基于K means的结果 来初始化mu, r以及\Sigma
+## 初始化 并不影响Piror 以及 posterior的设置
+
+### 首先需要初始化几个mu_k
+### 然后再根据 clustering规则 
+### 决定每个\theta_i
+# 注意 这里的Unif sampling
+# 结果是 cartesian coordinates的坐标
+# 且这里用于衡量距离的坐标也是cartesian坐标 所以不用转化为polar
+
+library('rotasym')
+
+# 假设 先有 kk个初始的mean vector 反正后面可以再加
+kk <- 3
+simulate_means <- r_unif_sphere(kk,k) # k 是维度
+## 这里要与 x_i/||x_i|| 即被scaled后的x_i进行内积
+## 
+scaleX <- function(X){
+  scale_X <- X
+  for(i in 1:nrow(X)){
+    scale_X[i,] <- X[i,]/ norm(X[i,],type = '2')
+  }
+  return(scale_X)
+}
+
+Xscale <- scaleX(X)
+
+## 于是就要argmax_k(x_i^\top * \mu_k), k <= K, 
+
+kmeans_onsphere <- function(x,u){
+  ## lambda+1  = cos(\phi_\lambda)
+  ## 其中\phi_\lambda 是max angular spread
+  
+  # 夹角用arccos表示
+  # 而且这里的内积 是要求x u都是norm=1
+  # 所以下面输入的变量应是
+  # Xscale
+  z<-c()
+  for(i in 1:nrow(x)){
+    xu<-matrix(x[i,],
+               ncol = length(x[i,])) %*% t(u)
+    ## max angular spread
+    ## 若是Min 则对new cluster的出现会非常保守
+    ## 不如尝试相邻角度的max angular spread
+    pairwise_spread <- c()
+    spread <- u %*% t(u)
+    for(j in 1:(nrow(u)-1)){
+      pairwise_spread[j] <- spread[j,j+1] 
+    }
+    
+    xu[length(xu)+1] <- min(pairwise_spread)
+    z[i]<-which.max(xu)
+    
+  }
+  ## 防止出现null cluster的情况 需要reorder
+  z <- as.numeric(as.factor(z))
+  return(z)
+} 
+
+## kmeans的聚类是不准确的 因为本来simulate的X只有五个cluster
+## 结果这里的 initial cluster有8个
+
+## 将cluster的mean通过average的方法得出
+
+inicluster_means <- function(X,ind){
+  u <- list()
+  for(i in unique(ind)){
+    ## 若遇到singleton
+    ## 则下面的代码不适用
+    if(sum(ind==i)==1){
+      u[[i]] <- t(X[which(ind == i),])
+    }else(u[[i]] <- t(apply((X[which(ind == i),]),MARGIN = 2,mean)))
+  }
+  return(u)
+}
+
+
+inicluster_karchermeans <- function(X,ind){
+  
+  logarithm <- function(p,x){
+    theta <- acos(pmin(pmax(p %*% t(x),-1.0),1.0))
+    
+    if(theta <= 1e-07 ){
+      tangentx <- t(matrix(rep(0,length(p))))
+    }else{
+      tangentx <- (x-p %*% diag(rep(cos(theta),length(p))))%*%
+        diag(rep(theta/sin(theta),length(p)))
+    }
+    return(tangentx)
+  }
+  exponential <- function(p,tangentx){
+    ## tangent space中的tangentx的L2 norm
+    ## 刚好是 他对应的x 与 p的夹角
+    ## 直接带入l2 norm of tangent x即可
+    l2norm <- norm(tangentx,type = '2') ## 结果上看 确实=theta
+    if(l2norm == 0){ # 因为L2 norm 所以 其=0 有且仅有  = (0,...,0)
+      x <- p
+    }else if(cos(l2norm)==-1){
+      x <- -p 
+    }else{
+      x <- p %*% diag(rep(cos(l2norm),length(p)))+
+        tangentx %*% diag(rep(sin(l2norm)/l2norm,length(p)))}
+    
+    return(x)
+  }
+  karchermean <- function(x,epsilon=0.01){
+    # 需要Initialize 一个 p
+    ## 既然是为了求mean
+    ## 且x 都在sphere上
+    ## 于是可用empircal的方法得到一个初始值
+    newp <- t(matrix(apply(x, 2, mean)/norm(apply(x, 2, mean),type='2')))
+    ## 直接随机赋值 靠下面的迭代来更新
+    set.seed(343)
+    average_logx <- r_unif_sphere(1,ncol(x))
+    logx <- matrix(0,nrow(x),ncol(x))
+    #average_logx <- matrix(0,nrow = nrow(x), ncol = ncol(x))
+    for(itr in 1:3000){
+      for(i in 1:nrow(x)){
+        logx[i,] <- logarithm(newp,t(matrix(x[i,])))
+      }
+      ## apply(logx,2,mean) 才是 gradient
+      ## i= 11巨大
+      if(abs(acos(average_logx %*% apply(logx,2,mean)))>= epsilon){
+        average_logx <- t(matrix(apply(logx,2,mean)))
+        newp <- exponential(newp,average_logx)
+      }else{
+        break
+      }
+    }
+    return(newp)
+  }
+  
+  u <- list()
+  for(i in unique(ind)){
+    ## 若遇到singleton
+    ## 则下面的代码不适用
+    if(sum(ind==i)==1){
+      u[[i]] <- t(X[which(ind == i),])
+    }else{
+      Xscl <- scaleX(X[which(ind == i),])
+      mean_len <- rgamma(1,1,1)
+      u[[i]] <- karchermean(Xscl)
+    }
+  }
+  return(u)
+  
+}
+
+
+## 不用w_h 而改用CRP的方式 这就要求要考虑new cluster
+## 需要 no gap算法 (因为无法计算出 
+## \int f_\theta (y_i) G_0(d\theta) 
+## 故无法得知new cluster的likelihood)
+## 于是需要用no gap 且 用G_0 sampling new cluster mean
+
+## 问题在于 如果是new cluster 那么每次 {s_i=j}
+## 都需要生成一串新的参数 然后再计算 likelihood
+
+
+indexupdate_nogap <- function(ind,r,Theta,mu,Sigmastar,gamma,M_nogap = 10){
+  
+  jointdensity <- function(r,x,mu,Sigmastar,gamma){
+    #x指的就是r_i * u_i
+    
+    den1<- dmvn(c(x[-k]),c(mu[-k]+(gamma)*(x[k]-mu[k])),Sigmastar)
+    
+    den2 <- dnorm(x[k], mu[k], 1)
+    jodensity <- r^k * den1 * den2
+    return(jodensity)
+  }
+  
+  u <- umatrix(Theta)
+  
+  for(i in 1:nrow(Theta)){
+    
+    if(sum(ind == ind[i]) == 1){
+      ## 对于n_j = 1的情况 仍有 (k-1)/k的概率
+      ## 是不变的 不变的意思是
+      ## s_i不变 所以对i的循环就没必要了
+      ## 直接跳出
+      
+      ## 所以是有 1/(max(ind))的概率是变的
+      if(rbern(1,1/max(ind))==1){
+        
+        ## 不光是cluster要重排 
+        ## 对应的参数也要重排
+        
+        ## list的优点就是 删了之后 自动reorder
+        ## 且删para的过程 需要放到
+        ## label reordering之前
+        ## 不然就会误删
+        mu <- mu[-ind[i]]
+        Sigmastar <- Sigmastar[-ind[i]]
+        gamma <- gamma[-ind[i]]
+        
+        for(h in 1:length(ind)){
+          if(ind[h] > ind[i]){
+            ind[h] <- ind[h]-1
+          }else{ind[h] <- ind[h]}
+        }
+        kminus <- max(ind)
+        
+      }else{next}
+      
+    }else{kminus <- max(ind)}
+    
+    lik <- rep(0,kminus)
+    ## 注意是ind[-i]
+    for(j in unique(ind[-i])){
+      ## 不能用原始的x, 需要用r_i u_i,
+      lik[j]<- sum(ind[-i] == j) * jointdensity(r[i],r[i]*u[i,],mu[[j]],
+                                                Sigmastar[[j]],gamma[[j]])
+    }
+    ## 这里就是为new cluster准备的 \theta*_{kminus + 1}
+    ## 于是 r mu sigma gamma 都要重新由base measure生成
+    
+    potential_gamma<-rmvnorm(1,mean = rep(0,k-1),diag(rep(25,k-1)))
+    
+    potential_Sigmastar<-rinvwishart(k,diag(rep(5,each = k-1)))
+    
+    potential_mu<-rmvnorm(1,mean = rep(0,k),diag(rep(1,k)))
+    ## 所以 这是一种非常保守的new cluster promotion
+    ## 因为 从base measure中选出来的
+    ## M越大 则越鼓励new cluster 
+    lik[kminus+1] <- (M_nogap/(kminus+1)) * jointdensity(r[i],r[i]*u[i,],potential_mu,
+                                                         potential_Sigmastar,potential_gamma)
+    ind[i] <- which.max(lik)
+    ## 如果是新的cluster
+    
+    if(ind[i] == kminus+1){
+      gamma[[kminus+1]] <- potential_gamma
+      Sigmastar[[kminus+1]] <- potential_Sigmastar
+      mu[[kminus+1]] <- potential_mu
+    }
+  }
+  # 由于此处有新的 cluster parameter生成 
+  ## 所以需要将 新生成 而且重排的参数给输出
+  ## 对于旧有的 且obs > 1的组 则para仍会保留
+  ## 只不过组别会变而已
+  ## 对于新生成组 则需要将new para加入List中
+  para<- list(index = ind,gammalist = gamma,Sigmalist = Sigmastar,mulist = mu)
+  return(para)
+}
+
+
+
+## 如果new cluster对应的是min()
+## 这里可以放大M 鼓励new cluster的出现
+##
+index_nogap <- kmeans_onsphere(Xscale,simulate_means) ## 若 cluster不是no-gap的 
+## 即例如存在 cluster 2 是null 那需要reorder
+## 同样 对于上面的SB constructed过程
+## 若也出现了 cluster gap的情况 则需要注意reorder
+#mulistnew_nogap <- inicluster_means(X,index_nogap)
+mulistnew_nogap <- inicluster_karchermeans(X,index_nogap)
+
+## 这里的Initialization 需要根据Kmeans初始化的cluster num
+Sigmastarlistnew_nogap <- ini_Sigmastar(max(index_nogap))
+gammalistnew_nogap <- ini_gamma(max(index_nogap))
+rnew_nogap <- rinitialize(Theta)
+
+
+index_nogap_mcmc <- list()
+mulistnew_nogap_mcmc <- list()
+Sigmastarlistnew_nogap_mcmc <- list()
+gammalistnew_nogap_mcmc <- list()
+rnew_nogap_mcmc <- list()
+
+index_nogap_mcmc[[1]] <- index_nogap
+mulistnew_nogap_mcmc[[1]] <- mulistnew_nogap
+Sigmastarlistnew_nogap_mcmc[[1]] <- Sigmastarlistnew_nogap
+gammalistnew_nogap_mcmc[[1]] <- gammalistnew_nogap
+rnew_nogap_mcmc[[1]] <- rnew_nogap
+
+
+## 注意
+iterations <- 600
+## Warning can be ignored
+for(itr in 2:iterations){
+  ## mu的生成有问题 可能应该是行向量
+  
+  rnew_nogap<-MCMCr_mh(index_nogap,r=rnew_nogap,Theta = Theta,mulist = mulistnew_nogap,
+                    Sigmastarlist = Sigmastarlistnew_nogap,gammalist = gammalistnew_nogap)
+  
+  Sigmastarlistnew_nogap<-MCMCSigmastar(index_nogap,Sigmastarlist = Sigmastarlistnew_nogap,r=rnew_nogap,Theta=Theta,
+                                        mu=mulistnew_nogap,gamma=gammalistnew_nogap)
+  
+  gammalistnew_nogap<-MCMCgamma(index_nogap,r=rnew_nogap,Theta=Theta,
+                                gammalist=gammalistnew_nogap,mulist=mulistnew_nogap,
+                                Sigmastarlist=Sigmastarlistnew_nogap)
+  mulistnew_nogap<-MCMCmu(index_nogap,mulistnew_nogap,X,Theta,Sigmastarlistnew_nogap,gammalistnew_nogap)
+  
+  ## nogap for new cluster selecting
+  nogapresult<-indexupdate_nogap(ind=index_nogap,r=rnew_nogap,
+                                 Theta=Theta,mu=mulistnew_nogap,
+                                 Sigmastar=Sigmastarlistnew_nogap,gamma=gammalistnew_nogap)
+  
+  index_nogap<-nogapresult$index
+  Sigmastarlistnew_nogap <- nogapresult$Sigmalist
+  gammalistnew_nogap <- nogapresult$gammalist
+  mulistnew_nogap <- nogapresult$mulist
+  
+  index_nogap_mcmc[[itr]] <- index_nogap
+  mulistnew_nogap_mcmc[[itr]] <- mulistnew_nogap
+  Sigmastarlistnew_nogap_mcmc[[itr]] <- Sigmastarlistnew_nogap
+  gammalistnew_nogap_mcmc[[itr]] <- gammalistnew_nogap
+  rnew_nogap_mcmc[[itr]] <- rnew_nogap
+  
+}
+
+
+
+save(rnew_nogap_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\rnew_nogap_mcmc_itr1200.Rdata')
+save(index_nogap_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\index_nogap_mcmc_itr1200.Rdata')
+save(Sigmastarlistnew_nogap_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\Sigmastarlistnew_nogap_mcmc_itr1200.Rdata')
+save(gammalistnew_nogap_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\gammalistnew_nogap_mcmc_itr1200.Rdata')
+save(mulistnew_nogap_mcmc,file = 'C:\\Users\\DingbangRen\\Desktop\\spherial clustering\\mulistnew_nogap_mcmc_itr1200.Rdata')
+
+rnew_nogap_mcmc[[1]]
+
+## 仍然有很多很多deviation
+
+rnew_nogap_mcmc[[iterations]]
+
+index_nogap_mcmc[[iterations]]
+
+par(mfrow=c(1,3))
+barplot(table(initial_cluster),main = 'initial',xlab = '',ylim = c(0,300))
+barplot(table(newindex_mcmc[[iterations]]),
+        main=paste('SB weight',', iter = ',as.character(iterations)),xlab = '',ylim = c(0,300))
+barplot(table(index_nogap_mcmc[[iterations]]),
+        main=paste('No-Gap sampler',', iter = ',as.character(iterations)),xlab = '',ylim = c(0,300))
+
+
+par(mfrow = c(2,2))
+plot(X[,1],X[,2],col = index_nogap_mcmc[[iterations]],main=paste('No-Gap sampler',', iter = ',as.character(iterations)))
+plot(X[,2],X[,3],col = index_nogap_mcmc[[iterations]],main=paste('No-Gap sampler',', iter = ',as.character(iterations)))
+plot(X[,3],X[,4],col = index_nogap_mcmc[[iterations]],main='')
+plot(X[,4],X[,5],col = index_nogap_mcmc[[iterations]],main='')
+
+
+par(mfrow = c(3,1))
+plot(Theta[,1],Theta[,2],col = index_nogap_mcmc[[iterations]],main=paste('No-Gap sampler',', iter = ',as.character(iterations)))
+plot(Theta[,2],Theta[,3],col = index_nogap_mcmc[[iterations]],main='')
+plot(Theta[,3],Theta[,4],col = index_nogap_mcmc[[iterations]],main='')
+
+
+
+par(mfrow = c(2,2))
+plot(X[,1],X[,2],col = index_nogap_mcmc[[1]],main=paste('No-Gap sampler',', iter = ',as.character(1)))
+plot(X[,2],X[,3],col = index_nogap_mcmc[[1]],main=paste('No-Gap sampler',', iter = ',as.character(1)))
+plot(X[,3],X[,4],col = index_nogap_mcmc[[1]],main='')
+plot(X[,4],X[,5],col = index_nogap_mcmc[[1]],main='')
+
+
+par(mfrow = c(3,1))
+plot(Theta[,1],Theta[,2],col = index_nogap_mcmc[[iterations]],main=paste('No-Gap sampler',', iter = ',as.character(iterations)))
+plot(Theta[,2],Theta[,3],col = index_nogap_mcmc[[iterations]],main='')
+plot(Theta[,3],Theta[,4],col = index_nogap_mcmc[[iterations]],main='')
+
+
+
+library('plot3D')
+library('plotly')
+
+
+
+plot_ly(x=~X[,1],y=~X[,2],z=~X[,3],
+        color = ~as.character(newindex_mcmc[[iterations]]),
+        main = '')
+
+plot_ly(x=~X[,1],y=~X[,2],z=~X[,3],
+        color = ~as.character(index_nogap_mcmc[[iterations]]),
+        main = paste('No-Gap sampler',', iter = ',as.character(iterations)))
+
+
+plot_ly(x=~Theta[,1],y=~Theta[,2],z=~Theta[,3],
+        color = ~as.character(index_nogap_mcmc[[iterations]]),
+        main = paste('No-Gap sampler',', iter = ',as.character(iterations)))
+
+plot_ly(x=~X[,1],y=~X[,2],z=~X[,3],
+        color = ~newindex_mcmc[[iterations]])
+
+
+###########################################
+# bug detection
+which(rnew_nogap==Inf)
+index_nogap[which(rnew_nogap==Inf)]
+
+bugind <- 53 ## 1 cluster的 还有5 34 48 59
+bugitr <- 2
+
+bugclu<-index_nogap_mcmc[[bugitr-1]][bugind]
+bugclu
+
+Theta[bugind,]
+rnew_nogap[bugind]
+
+which(index_nogap_mcmc[[bugitr-1]] == index_nogap_mcmc[[bugitr-1]][bugind])# 
+rnew_nogap[which(index_nogap == index_nogap[bugind])]
+
+
+
+u <- umatrix(Theta[bugind,])
+u
+#norm(u,type = '2')
+#newindex_mcmc[[1]][36]
+Sigmastar <- Sigmastarlistnew_nogap_mcmc[[bugitr-1]][[bugclu]]
+Sigmastar
+gamma <- gammalistnew_nogap_mcmc[[bugitr-1]][[bugclu]]
+Cov <- covariance(Sigmastar,gamma)
+Cov
+
+mu <- mulistnew_mcmc[[bugitr-1]][[bugclu]]
+
+##Cov == t(Cov)
+#eigen(Cov)
+
+
+#for(i in 1:nrow(Theta)){
+
+## Cov要求是半正定矩阵
+## 其特征值不应小于0 但是此处却出现了<0的量
+## The covariance matrix is always both symmetric and positive semi- definite.
+i=1
+
+A = t(u[i,]) %*% solve(Cov) %*% (u[i,])   ## ? u_i到底是什么
+solve(Cov)
+
+##仅对一个观测量
+## 即使是在他所对应的cov和mu都正常 的情况下 (即Cov是正定的)
+## 进行N次实验 也会出现莫名奇妙的 Inf
+## Inf 与 v ==0 对应
+## 说明exp(-(A*(rr - B/A)^2)/2) -> 0
+## 即说明rr - B/A过大
+## 究竟是rr-B/A过大 还是A过大
+
+fakeA <- c()
+fakeB <- c()
+fakev <- c()
+faker <- c()
+fakediff <- c()
+fakeexp <- c()
+fakelogva <- c()
+fake_rho1 <- c()
+fake_rho2 <- c()
+
+rrr <- rinitialize(Theta)
+bugind <- 10
+rr <- rrr[bugind]
+set.seed(124134)
+fakemu <- mulistnew_mcmc[[1]][newindex_mcmc[[1]][bugind]]
+
+
+for(tt in 1:100){
+  fakesigma<- rwishart(k,diag(rep(50,k-1)))
+  fakegamma <- rmvn(1,rep(0,k-1), diag(rep(100,k-1)))
+  rownames(fakegamma) <- NULL
+  
+  covariance(fakesigma,fakegamma) -> fakecov
+  
+  fakeA[tt] <-(umatrix(Theta[bugind,])) %*% solve(fakecov) %*% t(umatrix(Theta[bugind,])) 
+  fakeB[tt] <- (umatrix(Theta[bugind,])) %*% solve(fakecov) %*% as.matrix(unlist(fakemu))
+  fakev[tt] <- runif(1,min=0,max = exp(-(fakeA[tt]*(rr- fakeB[tt]/fakeA[tt])^2)/2))
+  
+  fakeexp[tt]<-exp(-(fakeA[tt]*(rr - fakeB[tt]/fakeA[tt])^2)/2)
+  
+  fakediff[tt] <- (rr - fakeB[tt]/fakeA[tt])^2
+  uu <- runif(1,0,1)
+  
+  fakelogva[tt] <- sqrt(-2 * log(fakev[tt])/fakeA[tt])
+  
+  fakerho1 <- fakeB[tt]/fakeA[tt]+max(-fakeB[tt]/fakeA[tt],-sqrt(-2*log(fakev[tt])/fakeA[tt]))
+  fakerho2 <- fakeB[tt]/fakeA[tt] + sqrt(-2*log(fakev[tt])/fakeA[tt])
+  
+  
+  faker[tt] <- ((fakerho2^k - fakerho1^k)*uu + fakerho1^k)^(1/k)
+  
+  if(faker[tt] == Inf){
+    fakerho1 <- fakeB[tt]/fakeA[tt]+max(-fakeB[tt]/fakeA[tt],
+                                        -sqrt((rr-fakeB[tt]/fakeA[tt])^2) )
+    fakerho2 <- fakeB[tt]/fakeA[tt] + sqrt((rr-fakeB[tt]/fakeA[tt])^2) 
+    faker[tt] <- ((fakerho2^k - fakerho1^k)*uu + fakerho1^k)^(1/k)
+  }
+  fake_rho1[tt] <- fakerho1
+  fake_rho2[tt] <- fakerho2
+}
+
+fakeA
+fakeB
+fakediff
+fakeexp
+fakev
+fakelogva
+faker
+
+faker[which(faker>5)]
+fakeA[which(faker>5)]
+fakeB[which(faker > 5)]
+fakediff[which(faker > 5)]
+## 关注 10 obs
+
+fakeexp[which(faker > 5)]
+fakev[which(faker > 5)]
+fakeA[which(faker>5)]
+
+sqrt(-2* log(fakev[which(faker > 5)])/fakeA[which(faker > 5)])
+
+
+fakev[which(faker < 5)]
+-2 * log(fakev[which(faker < 5)])
+fakeA[which(faker<5)]
+sqrt(-2* log(fakev[which(faker < 5)])/fakeA[which(faker < 5)])
+
+
+
+fakelogva[which(faker > 5)]# sqrt(-2* ln v_i / A_i)
+fakeB / fakeA # 正常
+
+fake_rho1[which(faker > 5)]
+fake_rho2[which(faker > 5)]
+
+fakeexp[which(-2*log(fakev)>10)]
+
+
+#########################################
+
+## tangent normal 5)
+
+## 此处产生的是行向量
+## 所以内积计算时 需要 p %*% t(x)
+## 上面的sphere变量 也是行向量
+#acos(as.numeric(as.character(t(x[9,])%*%x[9,])))  ## 此处的p^T p = 1
+
+#acos(as.numeric(as.character(t(x[8,])%*%x[9,])))  ## 此处的p^T p = 1
+
+## 会出现 x , p的夹角为pi
+## 则是intractable的 (tangentx 在tangent space的boundary)
+## 既然p, x是相反的 那么在uk, x的背景下
+## 可直接将x剔除k 
+logarithm <- function(p,x){
+  theta <- acos(pmin(pmax(p %*% t(x),-1.0),1.0))
+  
+  if(theta <= 1e-07 ){
+    tangentx <- t(matrix(rep(0,length(p))))
+  }else{
+    tangentx <- (x-p %*% diag(rep(cos(theta),length(p))))%*%
+      diag(rep(theta/sin(theta),length(p)))
+  }
+  return(tangentx)
+}
+
+
+exponential <- function(p,tangentx){
+  ## tangent space中的tangentx的L2 norm
+  ## 刚好是 他对应的x 与 p的夹角
+  ## 直接带入l2 norm of tangent x即可
+  l2norm <- norm(tangentx,type = '2') ## 结果上看 确实=theta
+  if(l2norm == 0){ # 因为L2 norm 所以 其=0 有且仅有  = (0,...,0)
+    x <- p
+  }else if(cos(l2norm)==-1){
+    x <- -p 
+  }else{
+    x <- p %*% diag(rep(cos(l2norm),length(p)))+
+      tangentx %*% diag(rep(sin(l2norm)/l2norm,length(p)))}
+  
+  return(x)
+}
+
+## 为什么 映射回到sphere上的 不是unit 1 vector
+## 因为无法保证 random vector在T S^{D-1}空间上
+## 若不在tangent space上 则自然不能map回 sphere
+## 可以采用rejection sampling
+## 这样即使不知道closed form f 
+## 也可以抽样
+
+## 还有一种可能 
+
+
+karchermean <- function(x,epsilon=0.01){
+  # 需要Initialize 一个 p
+  ## 既然是为了求mean
+  ## 且x 都在sphere上
+  ## 于是可用empircal的方法得到一个初始值
+  newp <- t(matrix(apply(x, 2, mean)/norm(apply(x, 2, mean),type='2')))
+  ## 直接随机赋值 靠下面的迭代来更新
+  set.seed(343)
+  average_logx <- r_unif_sphere(1,ncol(x))
+  logx <- matrix(0,nrow(x),ncol(x))
+  #average_logx <- matrix(0,nrow = nrow(x), ncol = ncol(x))
+  for(itr in 1:3000){
+    for(i in 1:nrow(x)){
+      logx[i,] <- logarithm(newp,t(matrix(x[i,])))
+    }
+    ## apply(logx,2,mean) 才是 gradient
+    ## i= 11巨大
+    if(abs(acos(average_logx %*% apply(logx,2,mean)))>= epsilon){
+      average_logx <- t(matrix(apply(logx,2,mean)))
+      newp <- exponential(newp,average_logx)
+    }else{
+      break
+    }
+  }
+  return(newp)
+}
+
+#############################
+
+## 不应出现 p,x的夹角是pi的情况
+## 在uk , x的背景下 则需要提防 uk, x为相反的情况
+## 若 夹角为pi 说明x需要被踢出 k类
+## 一方面需要正确的初始化 另一方面 如果因为错分 得到夹角为pi 
+## 那该如何？
+#H <- 5
+priorSigma_tangent <- diag(rep(1,each = ncol(Theta)+1))
+## 注意针对的不是theta本身
+## 而是在圆上的 坐标 所以是scaled后的X
+
+ini_Sigma_tangent <- function(H){
+  S <- list()
+  j <- 1
+  while(j <= H){
+    ## 注意initialization 
+    ## 不然后面在计算r update的时候
+    ## 就会出现 A = u^T solve(Sigma) u过大的问题
+    ## 于是 需要初始化较大的Sigma
+    ## 这样才能有solve(Sigma)不过大
+    S[[j]] <- rinvwishart(ncol(Theta)+1,priorSigma_tangent)
+    j <- j+1
+  }
+  return(S)
+}
+
+
+Xscale <- umatrix(Theta)
+kk <- 3
+set.seed(1493)
+simulate_tangentmeans <- r_unif_sphere(kk,ncol(Theta)+1) # k 是维度
+
+
+## 图上的分类并不理想
+## 所以才会有都聚于一类的假象
+## 但为什么 kmeans显示有这么多类呢
+
+kmeans_onsphere <- function(x,u){
+  ## lambda+1  = cos(\phi_\lambda)
+  ## 其中\phi_\lambda 是max angular spread
+  
+  # 夹角用arccos表示
+  # 而且这里的内积 是要求x u都是norm=1
+  # 所以下面输入的变量应是
+  # Xscale
+  z<-c()
+  for(i in 1:nrow(x)){
+    xu<-matrix(x[i,],
+               ncol = length(x[i,])) %*% t(u)
+    ## max angular spread
+    ## 若是Min 则对new cluster的出现会非常保守
+    ## 不如尝试相邻角度的max angular spread
+    pairwise_spread <- c()
+    spread <- u %*% t(u)
+    for(j in 1:(nrow(u)-1)){
+      pairwise_spread[j] <- spread[j,j+1] 
+    }
+    
+    xu[length(xu)+1] <- min(pairwise_spread)
+    z[i]<-which.max(xu)
+    
+  }
+  ## 防止出现null cluster的情况 需要reorder
+  z <- as.numeric(as.factor(z))
+  return(z)
+} 
+
+
+cluster_tangentmeans <- function(X,ind){
+  mu <- list()
+  for(i in unique(ind)){
+    ## 若遇到singleton
+    ## 则下面的代码不适用
+    if(sum(ind==i)==1){
+      mu[[i]] <- t(X[which(ind == i),])
+    }else{
+      mu[[i]] <- karchermean(X[which(ind == i),])
+    }
+  }
+  return(mu)
+}
+
+## posterior
+
+Sigmatangent_posterior <- function(X,mu,karcher){
+  if(is.vector(X)){
+    X <- t(matrix(X))
+  }
+  
+  S_xk <- matrix(0,ncol(X),ncol(X))
+  j <- 1
+  while(j <= nrow(X)){
+    S_xk <- S_xk + t(logarithm(karcher,t(X[j,]))) %*% logarithm(karcher,t(X[j,]))
+    j<-j+1
+  }
+  
+  Sk <- S_xk + nrow(X) * t(logarithm(mu,karcher)) %*% logarithm(mu,karcher)
+  # ncol(X) = nrow(Theta) is the prior parameter
+  # nrow(X) is the number of component
+  Sigma_posterior <- rinvwishart(ncol(X)+nrow(X),Sk+priorSigma_tangent)
+  return(Sigma_posterior)
+}
+
+
+rejsampling_mu <- function(X,Sigma,karcher,iter = 1000){
+  for(i in 1:iter){
+    prop_mu <- r_unif_sphere(1,nrow(Sigma))
+    ## 防止生成的 x = -karcher 这样无法得到投影向量
+    if(acos(pmin(pmax(karcher %*% t(prop_mu),-1.0),1.0))==pi){
+      next
+    }else{
+      prop_tangent <- logarithm(karcher,prop_mu)
+    }
+    ## 需要保证f(x) <= Mg(x)
+    ## 其中 f, g都是unif(S^{D-1})
+    ## 所以M 只需 = max(N(0,Sigma/N)) 即可
+    M <- dmvn(rep(0,nrow(Sigma)),mu = rep(0,nrow(Sigma)), Sigma/nrow(X) )
+    u <- runif(1,0,1)
+    ## 注意 这里的随机变量是
+    ## Log_<x>_k (prop_mu)
+    if(u < dmvn(prop_tangent,mu = rep(0,nrow(Sigma)),Sigma/nrow(X)) / M){
+      break
+    }else{next}
+  }
+  return(prop_mu)
+}
+
+#rejsampling_mu(X,Sigma = Sigma,karcher)
+
+mutangent_posterior <- function(X,mu,Sigma,karcher,iter = 1000){
+  
+  if(is.vector(X)){
+    X <- t(X)
+  }
+  for(i in 1:iter){
+    
+    newmu <- rejsampling_mu(X,Sigma,karcher)
+    ### 如果下面这一项太小 说明newmu不理想 则可以进行下一轮
+    if(dmvnorm(logarithm(karcher,newmu),mean = rep(0,nrow(Sigma)),
+               sigma = Sigma/nrow(X))==0){
+      next
+    }
+    proposal_ratio <- dmvnorm(logarithm(karcher,mu),mean = rep(0,nrow(Sigma)),
+                              sigma = Sigma/nrow(X))/dmvnorm(logarithm(karcher,newmu),mean = rep(0,nrow(Sigma)),
+                                                             sigma = Sigma/nrow(X))
+    
+    posterior_ratio <- 1
+    j <- 1
+    while(j <= nrow(X)){
+      posterior_ratio <- posterior_ratio * dmvnorm(logarithm(newmu,t(X[j,])),mean = rep(0,nrow(Sigma)),
+                                                   sigma = Sigma)/dmvnorm(logarithm(mu,t(X[j,])),mean = rep(0,nrow(Sigma)),
+                                                                          sigma = Sigma)
+      j <- j+1
+    }
+    
+    r <- proposal_ratio * posterior_ratio
+    
+    u <- runif(1,0,1)
+    if(u<=r){
+      finalmu <- newmu
+      break
+    }else{
+      finalmu <- mu 
+    }
+  }
+  return(finalmu)
+}
+
+
+## MCMC function
+MCMCSigma_tangent <- function(newindex,Sigmatangentlist,X,mulist,karchermean_list){
+  Slist <- Sigmatangentlist
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    Slist[[cluster]] <- Sigmatangent_posterior(X[ind,],
+                                               mulist[[cluster]],
+                                               karchermean_list[[cluster]])
+  }
+  
+  return(Slist)
+}
+
+MCMCmu_tangent <- function(newindex,Sigmatangentlist,X,mulist,karchermean_list){
+  mlist <- mulist
+  for(h in 1:length(unique(newindex))){
+    cluster<-unique(newindex)[h]
+    ind <- which(newindex==cluster)
+    mlist[[cluster]] <- mutangent_posterior(X[ind,],
+                                            mulist[[cluster]],
+                                            Sigmatangentlist[[cluster]],
+                                            karchermean_list[[cluster]])
+  }
+  
+  return(mlist)
+}
+
+## 因为都在一个圆上
+## 所以此likelihood不会差太多 此时 n^{-j}反而成了决定性因素
+## 所以 会导致很严重的Misallocation 
+
+indexupdate_tangent <- function(ind,X,mulist,Sigmalist,karchermean_list,Mmass=150){
+  
+  
+  for(i in 1:nrow(X)){
+    
+    if(sum(ind == ind[i]) == 1){
+      ## 对于n_j = 1的情况 仍有 (k-1)/k的概率
+      ## 是不变的 不变的意思是
+      ## s_i不变 所以对i的循环就没必要了
+      ## 直接跳出
+      
+      ## 所以是有 1/(max(ind))的概率是变的
+      if(rbern(1,1/max(ind))==1){
+        
+        ## 不光是cluster要重排 
+        ## 对应的参数也要重排
+        
+        ## list的优点就是 删了之后 自动reorder
+        ## 且删para的过程 需要放到
+        ## label reordering之前
+        ## 不然就会误删
+        mulist <- mulist[-ind[i]]
+        Sigmalist <- Sigmalist[-ind[i]]
+        
+        for(h in 1:length(ind)){
+          if(ind[h] > ind[i]){
+            ind[h] <- ind[h]-1
+          }else{ind[h] <- ind[h]}
+        }
+        kminus <- max(ind)
+        
+      }else{next}
+      
+    }else{kminus <- max(ind)}
+    
+    lik <- rep(0,kminus)
+    ## 注意是ind[-i]
+    for(j in unique(ind[-i])){
+      
+      ## 不能用原始的x, 需要用r_i u_i,
+      lik[j]<- sum(ind[-i] == j) * dmvn(logarithm(mulist[[j]],t(X[i,])),
+                                        rep(0,ncol(t(X[i,]))),Sigmalist[[j]])
+    }
+    ## 这里就是为new cluster准备的 \theta*_{kminus + 1}
+    ## 于是 r mu sigma gamma 都要重新由base measure生成
+    
+    potential_Sigma<- rinvwishart(ncol(X),priorSigma_tangent)
+    
+    potential_mu<-r_unif_sphere(1,ncol(X))
+    ## 所以 这是一种非常保守的new cluster promotion
+    ## 因为 从base measure中选出来的
+    ## M越大 则越鼓励new cluster 
+    if(acos(pmin(pmax(potential_mu %*% matrix(X[i,],ncol =1),-1.0),1.0))==pi){
+      lik[kminus+1] <- 0
+    }else{
+      lik[kminus+1] <- (Mmass/(kminus+1)) * dmvn(logarithm(potential_mu,t(X[i,])),
+                                                 rep(0,ncol(t(X[i,]))),Sigmalist[[j]])
+    }
+    
+    ind[i] <- which.max(lik)
+    ## 如果是新的cluster
+    
+    if(ind[i] == kminus+1){
+      Sigmalist[[kminus+1]] <- potential_Sigma
+      mulist[[kminus+1]] <- potential_mu
+    }
+  }
+  # 由于此处有新的 cluster parameter生成 
+  ## 所以需要将 新生成 而且重排的参数给输出
+  ## 对于旧有的 且obs > 1的组 则para仍会保留
+  ## 只不过组别会变而已
+  ## 对于新生成组 则需要将new para加入List中
+  para<- list(index = ind,Sigmalist = Sigmalist,mulist = mulist)
+  return(para)
+}
+
+####
+
+vseq <- function(H,parameter=matrix(rep(c(1,M), H),ncol=2,byrow = T)){
+  # parameter 是 H x 2的矩阵
+  # 包含了各个h 下的 a,b 参数for beta
+  set.seed(1341)
+  v <- c()
+  j = 1
+  while(j <= H-1){
+    v[j] <- rbeta(1,parameter[j,][1],parameter[j,][2])
+    j = j+1
+  }
+  v[H] <- 1
+  return(v)
+}
+
+
+sbweight <- function(H,v){
+  sbconstruction <- function(h,v){
+    w <- 1
+    t <- 1
+    while(t <= h){
+      if(t < h){
+        w <- w * (1-v[t])
+      }else{
+        w <- w * v[t]
+      }
+      t <- t+1
+    }
+    return(w)
+  }
+  
+  wvector <- c()
+  jj <- 1
+  while(jj <= H){
+    wvector[jj] <- sbconstruction(jj,v)
+    jj <- jj+1
+  }
+  return(wvector)
+}
+
+## 注意 Beta(A_h + 1 , B_h + M )
+## 中的h = 1~H-1
+## 但其实在vseq函数中 已经select v_1~v_H-1了
+betaparameterupdate <- function(H,newindex){
+  bmatrix <- matrix(rep(0,2*H),ncol = 2)
+  for(h in 1:H){
+    bmatrix[h,] <- c(1+sum(newindex==h),
+                     M+sum(newindex>h))
+  }
+  return(bmatrix)
+}
+#############################
+
+ind <- index_tangent
+mulist <- mulist_tangent
+Sigmalist <- Sigmalist_tangent
+karcher <- karchermean_k
+clusterweight <- clusterweight_tangent
+
+i <- 100
+
+Xi <- X[i,]
+ind[i]
+
+Sigmarandom <- rinvwishart(ncol(t(Xi)),priorSigma_tangent)
+
+
+Sigmarandom <- diag(rep(2,ncol(t(Xi))))
+
+h <- 4
+
+dmvn(logarithm(mulist[[h]],t(Xi)),
+     rep(0,ncol(t(Xi))),Sigmarandom)
+
+dmvn(rep(0,ncol(t(Xi))),
+     rep(0,ncol(t(Xi))),Sigmarandom)
+
+acos(karchermean_k[[2]] %*% t(karchermean_k[[4]]))
+
+karmat<-matrix(unlist(karchermean_k),ncol = ncol(t(Xi)),byrow = T)
+karind <- c(5,6,7,8)
+XX <- rbind(Xscale,karmat)
+indexplus <- c(index_tangent,karind)
+
+
+plot_ly(x = Xscale[,1],y =  Xscale[,2], z =  Xscale[,3],color = index_tangent)
+
+plot_ly(x = karmat[,1],y =  karmat[,2], z =  karmat[,3],color = karind)
+
+plot_ly(x = XX[,1],y =  XX[,2], z =  XX[,3],color = indexplus)
+
+samind <- c(i,(nrow(XX)-3):(nrow(XX)))
+
+plot_ly(x = XX[samind,4],y =  XX[samind,5], 
+        z =  XX[samind,6],color = indexplus[samind])
+
+########################################
+
+## 为什么对应的 karcher mean反而得到的likelihood不是最优的
+## 难道说karcher mean本身的计算有问题
+
+indexupdate_tangent_SB <- function(clusterweight,ind,X,
+                                   mulist,Sigmalist){
+  
+  index_select <- function(clusterweight,ind,Xi,
+                           mulist,Sigmalist){
+    index <- rep(0,max(ind))
+    for(h in unique(ind)){
+      index[h] <- clusterweight[h] * dmvn(logarithm(mulist[[h]],t(Xi)),
+                                          rep(0,ncol(t(Xi))),Sigmalist[[h]])
+    }
+    return(which.max(index))
+  }
+  
+  finalindex <- ind
+  for(i in 1:nrow(X)){
+    
+    finalindex[i] <- index_select(clusterweight,ind,X[i,],
+                                  mulist,Sigmalist)
+  }
+  
+  finalindex <- as.numeric(as.factor(finalindex))
+  return(finalindex)
+}
+
+
+
+#indexupdate_tangent(clusterweight_tangent,index_tangent,Xscale,
+                    #mulist_tangent,Sigmalist_tangent)
+
+#clusterweight<- sbweight(H,
+                         #vseq(H,betaparameterupdate(H,newindex)))
+
+
+### initialization
+
+
+
+index_tangent <- kmeans_onsphere(Xscale,simulate_tangentmeans) ## 若 cluster不是no-gap的 
+## 即例如存在 cluster 2 是null 那需要reorder
+## 同样 对于上面的SB constructed过程
+## 若也出现了 cluster gap的情况 则需要注意reorder
+
+## 由于需要算karchermean 所以需要耗时很久
+karchermean_k <- cluster_tangentmeans(Xscale,index_tangent)
+Sigmalist_tangent<-ini_Sigma_tangent(max(index_tangent))
+
+mulist_tangent <- karchermean_k
+
+
+
+
+
+M <- 2
+clusterweight_tangent <- sbweight(max(index_tangent),vseq(max(index_tangent)))
+
+
+
+#plot_ly(x= X[,1],y = X[,2],z = X[,3], color = initial_cluster)
+plot_ly(x= Xscale[,1],y = Xscale[,2],z = Xscale[,3], color = initial_cluster)
+plot_ly(x= Xscale[,1],y = Xscale[,2],z = Xscale[,3], color = index_tangent)
+
+plot_ly(x= Xscale[,4],y = Xscale[,5], color = initial_cluster)
+plot_ly(x= Xscale[,4],y = Xscale[,5], color = index_tangent)
+
+testmu<-matrix(unlist(mulist_tangent),ncol=ncol(mulist_tangent[[1]]),byrow = T)
+plot_ly(x= testmu[,1],y = testmu[,2],z = testmu[,3], color = as.character(c(1,2,3)))
+plot_ly(x= testmu[,4],y = testmu[,5], color = as.character(c(1,2,3)))
+
+xandmu<-rbind(Xscale,testmu)
+indexforall <- as.character(c(index_tangent,c(5,6,7)))
+
+plot_ly(x= xandmu[,1],y = xandmu[,2],z = xandmu[,3], color = indexforall)
+plot_ly(x= xandmu[,4],y = xandmu[,5], color = indexforall)
+
+checkrow <- c(i,(nrow(xandmu)-3):nrow(xandmu))
+
+plot_ly(x= xandmu[checkrow,1],y = xandmu[checkrow,2],z = xandmu[checkrow,3], color = indexforall[checkrow])
+plot_ly(x= xandmu[checkrow,4],y = xandmu[checkrow,5], color = indexforall[checkrow])
+
+################################
+set.seed(231)
+samplep <- r_unif_sphere(1,ncol(X))
+Xscale <- umatrix(Theta)
+pi/2
+(acos(samplep %*% Xscale[100,]) -> theta1)
+
+(acos(samplep %*% Xscale[10,]) -> theta2)
+
+
+logarithm(samplep,t(Xscale[100,]))->near
+logarithm(samplep,t(Xscale[10,]))->far
+
+index_tangent[100]
+index_tangent[10]
+
+dmvnorm(near,
+        rep(0,ncol(samplep)),Sigmalist_tangent[[2]])
+
+dmvnorm(far,
+        rep(0,ncol(samplep)),Sigmalist_tangent[[2]])
+
+dmvnorm(rep(0,ncol(samplep)),
+        rep(0,ncol(samplep)),Sigmalist_tangent[[2]])
+#############
+
+(acos(samplep %*% Xscale[120,]) -> theta1)
+
+(acos(samplep %*% Xscale[10,]) -> theta2)
+
+logarithm(samplep,t(Xscale[120,]))->near2
+logarithm(samplep,t(Xscale[10,]))->far2
+
+norm(near2,'2')
+
+dmvnorm(near2,
+        rep(0,ncol(samplep)),Sigmalist_tangent[[2]])
+
+dmvnorm(far2,
+        rep(0,ncol(samplep)),Sigmalist_tangent[[2]])
+
+
+#############################
+
+
+
+iterations <- 200
+for(i in 1:iterations){
+  
+  Sigmalist_tangent <- MCMCSigma_tangent(index_tangent,Sigmalist_tangent,Xscale,mulist_tangent,karchermean_k)
+  
+  mulist_tangent <- MCMCmu_tangent(index_tangent,Sigmalist_tangent,Xscale,mulist_tangent,karchermean_k)
+  
+  updateparameter_tangent <- indexupdate_tangent(index_tangent,Xscale,mulist_tangent,Sigmalist_tangent,karchermean_k)
+  
+  index_tangent<-updateparameter_tangent$index
+  mulist_tangent <- updateparameter_tangent$mulist
+  Sigmalist_tangent<-updateparameter_tangent$Sigmalist
+  
+  karchermean_k <- cluster_tangentmeans(Xscale,index_tangent)
+  
+}
+
+
+######
+clusterweight_tangent<- sbweight(H,
+                                 vseq(H,betaparameterupdate(H,index_tangent)))
+
+
+
+##############################
+## 为什么3 这么特殊
+
+
+
+
+ind <- index_tangent
+mulist <- mulist_tangent
+Sigmalist <- Sigmalist_tangent
+karchermean_list <-karchermean_k 
+i=47
+
+ind <- 2
+clu <- which(index_tangent==ind)
+mu <- mulist_tangent[[ind]]
+Sigma <- Sigmalist_tangent[[ind]]
+karcher <-karchermean_k[[ind]]
+XX <- X[clu,]
+
+mutangent_posterior <- function(X,mu,Sigma,karcher,iter = 1000){
+  
+  if(is.vector(XX)){
+    XX <- t(matrix(XX))
+  }
+  
+  for(i in 1:iter){
+    
+    
+    newmu <- rejsampling_mu(XX,Sigma,karcher)
+    
+    proposal_ratio <- dmvnorm(logarithm(karcher,mu),mean = rep(0,nrow(Sigma)),
+                              sigma = Sigma/nrow(XX))/dmvnorm(logarithm(karcher,newmu),mean = rep(0,nrow(Sigma)),
+                                                              sigma = Sigma/nrow(XX))
+    
+    posterior_ratio <- 1
+    j <- 1
+    while(j <= nrow(XX)){
+      posterior_ratio <- posterior_ratio * dmvnorm(logarithm(newmu,t(X[j,])),mean = rep(0,nrow(Sigma)),
+                                                   sigma = Sigma)/dmvnorm(logarithm(mu,t(X[j,])),mean = rep(0,nrow(Sigma)),
+                                                                          sigma = Sigma)
+      j <- j+1
+    }
+    
+    r <- proposal_ratio * posterior_ratio
+    
+    u <- runif(1,0,1)
+    if(u<=r){
+      finalmu <- newmu
+      break
+    }else{
+      finalmu <- mu 
+    }
+  }
+  return(finalmu)
+}
+
+ind <- index_tangent
+
+mulist <- mulist_tangent
+Sigmalist <- Sigmalist_tangent
+karchermean_list <-karchermean_k
+
+sampler <- r_unif_sphere(1,6)
+exponential(sampler,logarithm(sampler,t(Xscale[23,])))
+
+logarithm(sampler,t(Xscale[23,]))
+
+acos(sampler %*% (Xscale[23,]))
+pi/2
+
+
+indexupdate_tangent <- function(ind,X,mulist,Sigmalist,karchermean_list,Mmass=80){
+  
+  for(i in 1:nrow(X)){
+    i <- 69
+    ind[i]
+    
+    if(sum(ind == ind[i]) == 1){
+      ## 对于n_j = 1的情况 仍有 (k-1)/k的概率
+      ## 是不变的 不变的意思是
+      ## s_i不变 所以对i的循环就没必要了
+      ## 直接跳出
+      
+      ## 所以是有 1/(max(ind))的概率是变的
+      if(rbern(1,1/max(ind))==1){
+        
+        ## 不光是cluster要重排 
+        ## 对应的参数也要重排
+        
+        ## list的优点就是 删了之后 自动reorder
+        ## 且删para的过程 需要放到
+        ## label reordering之前
+        ## 不然就会误删
+        mulist <- mulist[-ind[i]]
+        Sigmalist <- Sigmalist[-ind[i]]
+        
+        for(h in 1:length(ind)){
+          if(ind[h] > ind[i]){
+            ind[h] <- ind[h]-1
+          }else{ind[h] <- ind[h]}
+        }
+        kminus <- max(ind)
+        
+      }else{next}
+      
+    }else{kminus <- max(ind)}
+    
+    lik <- rep(0,kminus)
+    theta_mu_x <- c()
+    orginal_lik <- c()
+    ## 注意是ind[-i]
+    for(j in unique(ind[-i])){
+      
+      ## 不能用原始的x, 需要用r_i u_i,
+      lik[j]<- sum(ind[-i] == j) * dmvnorm(logarithm(mulist[[j]],t(X[i,])),
+                                           rep(0,ncol(t(X[i,]))),Sigmalist[[j]])
+      orginal_lik[j] <- dmvnorm(logarithm(mulist[[j]],t(X[i,])),
+                                rep(0,ncol(t(X[i,]))),Sigmalist[[j]])
+      theta_mu_x[j] <- acos(mulist[[j]] %*% X[i,] ) 
+    }
+    lik
+    orginal_lik
+    theta_mu_x
+    
+    
+    
+    sum(ind==1)
+    sum(ind==2)
+    sum(ind==3)
+    ## 这里就是为new cluster准备的 \theta*_{kminus + 1}
+    ## 于是 r mu sigma gamma 都要重新由base measure生成
+    
+    potential_Sigma<- rinvwishart(ncol(X),priorSigma_tangent)
+    
+    potential_mu<-r_unif_sphere(1,ncol(X))
+    ## 所以 这是一种非常保守的new cluster promotion
+    ## 因为 从base measure中选出来的
+    ## M越大 则越鼓励new cluster 
+    if(acos(pmin(pmax(potential_mu %*% matrix(X[i,],ncol =1),-1.0),1.0))==pi){
+      lik[kminus+1] <- 0
+    }else{
+      lik[kminus+1] <- (Mmass/(kminus+1)) * dmvn(logarithm(potential_mu,t(X[i,])),
+                                                 rep(0,ncol(t(X[i,]))),Sigmalist[[1]])
+    }
+    
+    ind[i] <- which.max(lik)
+    ## 如果是新的cluster
+    
+    if(ind[i] == kminus+1){
+      Sigmalist[[kminus+1]] <- potential_Sigma
+      mulist[[kminus+1]] <- potential_mu
+    }
+  }
+  # 由于此处有新的 cluster parameter生成 
+  ## 所以需要将 新生成 而且重排的参数给输出
+  ## 对于旧有的 且obs > 1的组 则para仍会保留
+  ## 只不过组别会变而已
+  ## 对于新生成组 则需要将new para加入List中
+  para<- list(index = ind,Sigmalist = Sigmalist,mulist = mulist)
+  return(para)
+}
+
+dmvn(rep(0,ncol(t(X[i,]))),
+     rep(0,ncol(t(X[i,]))),Sigmalist[[j]])
