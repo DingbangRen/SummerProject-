@@ -1,0 +1,155 @@
+
+library('zipfR')
+plot(Ibeta(seq(0,1,0.01),a=0.001,b=6,lower=F))
+
+?Ibeta
+
+eps <- c(0.1,0.2,0.3,0.4)
+p <- runif(1,0.4,1)
+p
+c <- 20
+
+pow <- function(x,n){
+  return(x^n)
+}
+pow(p/(1-p),c*eps)
+
+pow(p/(1-p),0.5*eps)
+## 0.6,0.1��� ��ӽ�
+
+## �ܵ���˵ ����c \epsilonԽСԽ��
+
+
+cc <- 20
+epss <- 0.001
+# a ԽС Խ��β
+plot(dbeta(seq(0,1,0.01),cc*epss,cc*(1-epss)))
+
+lim <-c()
+for(i in 1:30){
+  pp <- runif(1,epss,1)
+  lim[i] <-pow(pp/(1-pp),cc*epss)
+}
+lim ## ֻҪepsilon��С �ұ�֤a�����ر�С
+## �Ϳ�������approximate BP
+
+# upper incomplete
+dbeta(seq(0,1,0.01),cc*epss,cc*(1-epss)) # density
+Ibeta(seq(0,1,0.01),a=cc*epss,b=cc*(1-epss),lower = F) ## upper incomplete
+plot(Ibeta(seq(0,1,0.01),a=cc*epss,b=cc*(1-epss),lower = F))
+## ֮���Ժ����С������ ����ΪB(a,b)������ aԽС ��Խ��β
+## inverse of Ibeta ??
+yy <- Ibeta(seq(0,1,0.01),a=cc*epss,b=cc*(1-epss),lower = F)
+Ibeta.inv(yy,a=cc*epss,b=cc*(1-epss),lower = F)## �������Inverse function
+
+
+## ��������㲻���� ���ƾ�ֻ��numerical 
+##����MCMC����
+
+## ��Ȼ Inverse of tail integral �Լ� tail integral�������
+## # ����ֻ��Ҫ��numerical�ķ�ʽ�����
+
+##################
+
+
+###################################
+## ��Ҫ���������supp
+## real lower bound
+
+d <- 10
+theta <- 5
+eps <- 0.01
+
+lowerbound<-(Ibeta(0,theta*eps,theta*(1-eps),lower = F))/d
+lower<-Ibeta.inv(lowerbound,theta*eps,theta*(1-eps),lower = F)
+
+upper<-Ibeta.inv(0,theta*eps,theta*(1-eps),lower = F)
+c(lower,upper)
+
+
+nn <- 3000000
+betalen <- c()
+integral <- c()
+for(j in 1:20){
+  set.seed(j)
+  betarandom<-rbeta(nn,theta*eps+1,theta*(1-eps))
+  betanice<-betarandom[which(betarandom > lower)]
+  betalen[j]<-length(betanice)
+  y <- c()
+  final <- c()
+  for(i in 1:length(betanice)){
+    y[i] <- d*Ibeta(betanice[i],theta*eps,theta*(1-eps),lower = F)
+    final[i] <- Ibeta.inv(y[i],theta*eps,theta*(1-eps),lower = F)
+  }
+  integral[j]<- sum(final) / length(betanice)
+}
+
+par(mfrow = c(2,1))
+plot(dbeta(x=seq(0,1,0.00001),theta*eps+1,theta*(1-eps)),x = seq(0,1,0.00001),main = 'theoretical',
+     xlab = '',ylab = '',type = 'p')
+
+plot(density(betanice),main = 'sampling for ind-co')
+
+2*d*(theta * Ibeta(1,theta*eps+2,theta*(1-eps)) - theta * Ibeta(1,theta*eps+1,theta*(1-eps)) * mean(integral))
+## after iter = 32, the value = 3.828
+
+
+
+
+# 经过了50次迭代之后 计算出mean integral 再将其带入
+## 得到的值是 0.5863
+
+##############
+
+## NA����Ϊ �������ɵ�y �� Beta(a,b) function����
+## ��Ȼ�󲻳���
+
+z <- runif(1,0,1)
+d <- 10
+betasample <- c()
+
+for(i in 1:1000000){
+  
+  s <- rbeta(1,theta*eps+1,theta*(1-eps))
+  fvalue<-d*(1-z)*Ibeta(s,theta*eps,theta*(1-eps),lower = F) +
+    z * Ibeta(s/d,theta*eps,theta*(1-eps),lower = F)
+  
+  if(fvalue >= 0 & fvalue <= Ibeta(1,theta*eps,theta*(1-eps))){
+     betasample<- c(betasample,s)
+  }else{
+    next
+  }
+ 
+}
+
+length(betasample)
+
+par(mfrow = c(2,1))
+plot(dbeta(x=seq(0,1,0.00001),theta*eps+1,theta*(1-eps)),x = seq(0,1,0.00001),main = 'theoretical',
+     xlab = '',ylab = '',type = 'p')
+plot(density(betasample),xlab = '',ylab = '',main = 'sampling results')
+
+integral_add <- function(betasample){
+  ffunction <- function(s){
+    uinside <- d*(1-z)*Ibeta(s,theta*eps,theta*(1-eps),lower = F) +
+      z*Ibeta(s/d,theta*eps,theta*(1-eps),lower = F)
+    return(uinside)
+  }
+  fvalue <- c()
+  for(i in 1:length(betasample)){
+    
+    fvalue[i] <- Ibeta.inv(ffunction(betasample[i]),theta*eps,
+                           theta*(1-eps),lower = F)
+  }  
+  return(mean(fvalue))
+}
+
+integral_addi <- integral_add(betasample)
+
+(wdist_addi <- d*(1-z)*theta * Ibeta(1,theta*eps+1, theta*(1-eps)) * integral_addi+
+  d*z*theta*Ibeta(1/d,theta*eps+1,theta*(1-eps)) * integral_addi)
+
+
+
+
+
