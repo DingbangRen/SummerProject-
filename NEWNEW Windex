@@ -19,12 +19,6 @@ integral_add <- function(sample,z){
   return(list(meanvalue=mean(fvalue), mean_square = mean(fvalue_square)))
 }
 
-dogo <- integral_add(betasample1,z[8])
-w_index[8] + (dogo$mean_square - (dogo$meanvalue)^2)/sqrt(length(betasample1))*1.96
-## 如何把置信区间安排上去
-
-
-## 当有truncation的时候
 (dseq <- c(seq(2,5,1),seq(10,12,1)))
 theta <- 10
 eps <- 0.00001/theta
@@ -32,8 +26,11 @@ eps <- 0.00001/theta
 w_index <- matrix(0, ncol = length(z), nrow = length(dseq))
 
 
+## 如何把置信区间安排上去
+
 for(d in dseq){
   add_int_1 <- c()
+  halfinterval_1 <- c()
   ## levy random measure 采用的是 
   ## v_epsBP * I{s>eps}
   ## 于是 对于第一项的second moment 是truncate at eps
@@ -57,12 +54,17 @@ for(d in dseq){
       
     } 
     
-    integral_addi_1 <- integral_add(betasample1,z[j])
+    mcresult_1 <- integral_add(betasample1,z[j])
+    
+    integral_addi_1 <- mcresult_1$meanvalue
+    
+    halfinterval_1[j]<-1.96*(integral_addi_1- (mcresult_1$meanvalue)^2)/sqrt(length(betasample1))
     
     add_int_1[j] <- d*(1-z[j])*theta * Ibeta(max(eps,min(betasample1)),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_1
   }
   
   add_int_2 <- c()
+  halfinterval_2 <- c()
   for(j in 1:length(z)){
     
     betasample2 <- c()
@@ -83,7 +85,11 @@ for(d in dseq){
       
     }
     
-    integral_addi_2 <- integral_add(betasample2*d,z[j])
+    mcresult_2 <- integral_add(betasample2,z[j])
+    
+    integral_addi_2 <- mcresult_2$meanvalue
+    
+    halfinterval_2[j]<-1.96*(integral_addi_2- (mcresult_2$meanvalue)^2)/sqrt(length(betasample2))
     ## truncated要考虑的是 s的lower, s>\epsilon, s满足if条件
     add_int_2[j] <- d*(z[j])*theta*Ibeta(max(eps,min(betasample2)),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_2
   }
@@ -127,6 +133,7 @@ w_index_noeps <- matrix(0, ncol = length(z), nrow = length(dseq))
 
 for(d in dseq){
   add_int_1 <- c()
+  halfinterval_1 <- c()
   ## levy random measure 采用的是 
   ## v_epsBP * I{s>eps}
   ## 于是 对于第一项的second moment 是truncate at eps
@@ -150,12 +157,17 @@ for(d in dseq){
       
     } 
     
-    integral_addi_1 <- integral_add(betasample1,z[j])
+    mcresult_1 <- integral_add(betasample1,z[j])
+    
+    integral_addi_1 <- mcresult_1$meanvalue
+    
+    halfinterval_1[j]<-1.96*(integral_addi_1- (mcresult_1$meanvalue)^2)/sqrt(length(betasample1))
     
     add_int_1[j] <- d*(1-z[j])*theta * Ibeta(min(betasample1),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_1
   }
   
   add_int_2 <- c()
+  halfinterval_2 <- c()
   for(j in 1:length(z)){
     betasample2 <- c()
     for(i in 1:80000){
@@ -175,7 +187,11 @@ for(d in dseq){
       
     }
     
-    integral_addi_2 <- integral_add(betasample2*d,z[j])
+    mcresult_2 <- integral_add(betasample2,z[j])
+    
+    integral_addi_2 <- mcresult_2$meanvalue
+    
+    halfinterval_2[j]<-1.96*(integral_addi_2- (mcresult_2$meanvalue)^2)/sqrt(length(betasample2))
     ## 注意此处是 min(betasample)*d 但实际上不该是 * d
     ## 因为 f(sd) \in (\eps,1]; 
     ## 但是variable 是 s
@@ -193,6 +209,7 @@ for(d in dseq){
   
 }
 
+library(ggplot2)
 result_withouteps<-data.frame(windex = as.vector(t(w_index_noeps)), zvalue= rep(z,nrow(w_index_noeps)),
                            dvalue = rep(dseq,each = length(z)))
 
@@ -247,3 +264,4 @@ par(new = T)
     geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
     theme(legend.title=element_blank())+
     labs(x =  'z',y = 'Wasserstein index',title = 'without truncation'))
+
