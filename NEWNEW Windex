@@ -1,0 +1,249 @@
+library('zipfR')
+
+integral_add <- function(sample,z){
+  ffunction <- function(s,z){
+    uinside <- d*(1-z)*Ibeta(s,theta*eps,theta*(1-eps),lower = F) +
+      z*Ibeta(s/d,theta*eps,theta*(1-eps),lower = F)
+    return(uinside)
+  }
+  fvalue <- c()
+  fvalue_square <- c()
+  for(i in 1:length(sample)){
+    
+    fvalue[i] <- Ibeta.inv(ffunction(sample[i],z),theta*eps,
+                           theta*(1-eps),lower = F)
+  }  
+  
+  fvalue_square <- fvalue^2
+  
+  return(list(meanvalue=mean(fvalue), mean_square = mean(fvalue_square)))
+}
+
+dogo <- integral_add(betasample1,z[8])
+w_index[8] + (dogo$mean_square - (dogo$meanvalue)^2)/sqrt(length(betasample1))*1.96
+## 如何把置信区间安排上去
+
+
+## 当有truncation的时候
+(dseq <- c(seq(2,5,1),seq(10,12,1)))
+theta <- 10
+eps <- 0.00001/theta
+(z <- seq(0,1,0.05))
+w_index <- matrix(0, ncol = length(z), nrow = length(dseq))
+
+
+for(d in dseq){
+  add_int_1 <- c()
+  ## levy random measure 采用的是 
+  ## v_epsBP * I{s>eps}
+  ## 于是 对于第一项的second moment 是truncate at eps
+  ## 对于第二项则是 truncate at max(eps, lower)
+  for(j in 1:length(z)){
+    betasample1<- c()
+    for(i in 1:80000){
+      
+      s <- rbeta(1,theta*eps+1,theta*(1-eps))
+      
+      if(s<=eps){next}
+      
+      fvalue<-d*(1-z[j])*Ibeta(s,theta*eps,theta*(1-eps),lower = F) +
+        z[j] * Ibeta(s/d,theta*eps,theta*(1-eps),lower = F)
+      
+      if(fvalue >= 0 & fvalue <= Ibeta(eps,theta*eps,theta*(1-eps),lower=F)){
+        betasample1<- c(betasample1,s)
+      }else{
+        next
+      }
+      
+    } 
+    
+    integral_addi_1 <- integral_add(betasample1,z[j])
+    
+    add_int_1[j] <- d*(1-z[j])*theta * Ibeta(max(eps,min(betasample1)),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_1
+  }
+  
+  add_int_2 <- c()
+  for(j in 1:length(z)){
+    
+    betasample2 <- c()
+    for(i in 1:80000){
+      
+      s <- rbeta(1,theta*eps+1,theta*(1-eps))
+      
+      if(s<=eps){next} # s>d\epsilon才行
+      
+      fvalue<-d*(1-z[j])*Ibeta(s*d,theta*eps,theta*(1-eps),lower = F) +
+        z[j] * Ibeta(s,theta*eps,theta*(1-eps),lower = F)
+      
+      if(fvalue >= 0 & fvalue <= Ibeta(eps,theta*eps,theta*(1-eps),lower = F)){
+        betasample2<- c(betasample2,s)
+      }else{
+        next
+      }
+      
+    }
+    
+    integral_addi_2 <- integral_add(betasample2*d,z[j])
+    ## truncated要考虑的是 s的lower, s>\epsilon, s满足if条件
+    add_int_2[j] <- d*(z[j])*theta*Ibeta(max(eps,min(betasample2)),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_2
+  }
+  
+  add_integral<-add_int_1 + add_int_2 ## 合并起来就是 每个z的integral项
+  
+  add_wist<-rep(d*theta*Ibeta(eps,theta*eps+2,theta*(1-eps),lower = F),length(z)) - add_integral
+  ## 此处当z = 0 时 则有W(v^{ind},v^{co})/2为最大 且也是分母的存在
+  ## 此处都是把2去掉了 所以实际上的max W 是 2*add_wist[when z = 0]
+  
+  w_index[which(dseq == d),] <- t(1 - add_wist/add_wist[1])
+  
+}
+
+library(ggplot2)
+result_witheps<-data.frame(windex = as.vector(t(w_index)), zvalue= rep(z,nrow(w_index)),
+           dvalue = rep(dseq,each = length(z)))
+
+p <- ggplot(result_witheps, aes(zvalue, windex))
+# A basic scatter plot
+(truncationplot<-p + geom_point(aes(colour = factor(dvalue)), size = 0.5)+
+  geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+  geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
+  theme(legend.title=element_blank())+
+  labs(x =  'z',y = 'Wasserstein index',title = 'with truncation'))
+
+
+ggplot(result_witheps[which(result_witheps$dvalue!=2),], aes(zvalue, windex))+geom_point(aes(colour = factor(dvalue)), size = 1)+
+  geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+  geom_line(aes(zvalue,zvalue),size = 0.5,linetype = "dashed")+ 
+  theme(legend.title=element_blank())+
+  labs(x =  'z',y = 'Wasserstein index')
+
+
+## 当没有truncation时
+(dseq <- c(seq(2,5,1),seq(10,12,1)))
+theta <- 10
+eps <- 0.00001/theta
+(z <- seq(0,1,0.05))
+w_index_noeps <- matrix(0, ncol = length(z), nrow = length(dseq))
+
+for(d in dseq){
+  add_int_1 <- c()
+  ## levy random measure 采用的是 
+  ## v_epsBP * I{s>eps}
+  ## 于是 对于第一项的second moment 是truncate at eps
+  ## 对于第二项则是 truncate at max(eps, lower)
+  for(j in 1:length(z)){
+    betasample1<- c()
+    for(i in 1:80000){
+      
+      s <- rbeta(1,theta*eps+1,theta*(1-eps))
+      
+      #if(s<=eps){next}
+      
+      fvalue<-d*(1-z[j])*Ibeta(s,theta*eps,theta*(1-eps),lower = F) +
+        z[j] * Ibeta(s/d,theta*eps,theta*(1-eps),lower = F)
+      
+      if(fvalue >= 0 & fvalue <= Ibeta(1,theta*eps,theta*(1-eps))){
+        betasample1<- c(betasample1,s)
+      }else{
+        next
+      }
+      
+    } 
+    
+    integral_addi_1 <- integral_add(betasample1,z[j])
+    
+    add_int_1[j] <- d*(1-z[j])*theta * Ibeta(min(betasample1),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_1
+  }
+  
+  add_int_2 <- c()
+  for(j in 1:length(z)){
+    betasample2 <- c()
+    for(i in 1:80000){
+      
+      s <- rbeta(1,theta*eps+1,theta*(1-eps))
+      
+      #if(s<=eps){next}
+      
+      fvalue<-d*(1-z[j])*Ibeta(s*d,theta*eps,theta*(1-eps),lower = F) +
+        z[j] * Ibeta(s,theta*eps,theta*(1-eps),lower = F)
+      
+      if(fvalue >= 0 & fvalue <= Ibeta(1,theta*eps,theta*(1-eps))){
+        betasample2<- c(betasample2,s)
+      }else{
+        next
+      }
+      
+    }
+    
+    integral_addi_2 <- integral_add(betasample2*d,z[j])
+    ## 注意此处是 min(betasample)*d 但实际上不该是 * d
+    ## 因为 f(sd) \in (\eps,1]; 
+    ## 但是variable 是 s
+    ## 所以应该是 \min {s_i}
+    add_int_2[j] <- d*(z[j])*theta*Ibeta(min(betasample2),theta*eps+1, theta*(1-eps),lower = F) * integral_addi_2
+  }
+  
+  add_integral<-add_int_1 + add_int_2 ## 合并起来就是 每个z的integral项
+  
+  add_wist<-rep(d*theta*Ibeta(eps,theta*eps+2,theta*(1-eps),lower = F),length(z)) - add_integral
+  ## 此处当z = 0 时 则有W(v^{ind},v^{co})/2为最大 且也是分母的存在
+  ## 此处都是把2去掉了 所以实际上的max W 是 2*add_wist[when z = 0]
+  
+  w_index_noeps[which(dseq == d),] <- t(1 - add_wist/add_wist[1])
+  
+}
+
+result_withouteps<-data.frame(windex = as.vector(t(w_index_noeps)), zvalue= rep(z,nrow(w_index_noeps)),
+                           dvalue = rep(dseq,each = length(z)))
+
+p2 <- ggplot(result_withouteps, aes(zvalue, windex))
+# A basic scatter plot
+(notruncationplot<-p2 + geom_point(aes(colour = factor(dvalue)), size = 0.5)+
+  geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+  geom_line(aes(zvalue,zvalue),size = 0.5,linetype = "dashed")+ 
+  theme(legend.title=element_blank())+
+  labs(x =  'z',y = 'Wasserstein index',title = 'without truncation'))
+
+
+ggplot(result_witheps[which(result_witheps$dvalue!=2),], aes(zvalue, windex))+geom_point(aes(colour = factor(dvalue)), size = 1)+
+  geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+  geom_line(aes(zvalue,zvalue),size = 0.5,linetype = "dashed")+ 
+  theme(legend.title=element_blank())+
+  labs(x =  'z',y = 'Wasserstein index')
+
+layout( matrix(c(1,2), ncol=1))
+(p + geom_point(aes(colour = factor(dvalue)), size = 1)+
+    geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.3)+
+    geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
+    theme(legend.title=element_blank())+
+    labs(x =  'z',y = 'Wasserstein index',title = 'with truncation'))
+(p2 + geom_point(aes(colour = factor(dvalue)), size = 1)+
+    geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+    geom_line(aes(zvalue,zvalue),size = 0.5,linetype = "dashed")+ 
+    theme(legend.title=element_blank())+
+    labs(x =  'z',y = 'Wasserstein index',title = 'without truncation'))
+
+
+(p +
+    geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 0.5)+
+    geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
+    theme(legend.title=element_blank())+
+    labs(x =  'z',y = 'Wasserstein index',title = 'with truncation'))
+
+
+
+# A basic scatter plot
+par(mfrow = c(1,2))
+ggplot(result_witheps[which(result_witheps$dvalue>9),], aes(zvalue, windex)) +
+    geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 1)+
+    geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
+    theme(legend.title=element_blank())+
+    labs(x =  'z',y = 'Wasserstein index',title = 'with truncation')
+par(new = T)
+
+
+(ggplot(result_withouteps[which(result_witheps$dvalue>9),], aes(zvalue, windex))+
+    geom_line(aes(zvalue,windex,group = dvalue,color = factor(dvalue)),size = 1)+
+    geom_line(aes(zvalue,zvalue),size = 0.3,linetype = "dashed")+ 
+    theme(legend.title=element_blank())+
+    labs(x =  'z',y = 'Wasserstein index',title = 'without truncation'))
